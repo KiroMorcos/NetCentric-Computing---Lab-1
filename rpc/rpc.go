@@ -90,7 +90,7 @@ func (s *Server) acceptLoop(listener net.Listener, stopped, done chan struct{}) 
 			if errors.Is(err, net.ErrClosed) {
 				return
 			}
-			time.Sleep(10 * time.Millisecond) 
+			time.Sleep(10 * time.Millisecond)
 			continue
 		}
 		s.workers.Add(1)
@@ -112,6 +112,7 @@ func (s *Server) Address() string {
 	}
 	return s.listener.Addr().String()
 }
+
 // TODO 3: Close the listener, signal the accept loop, wait for its workers,
 // and leave the server in a state where Start can be called again.
 // Stop stops accepting new connections and waits for active handlers to finish.
@@ -129,17 +130,16 @@ func (s *Server) Stop() error {
 	s.acceptDone = nil
 	s.mu.Unlock()
 
-	close(stopped)         
-	err := listener.Close() 
-	<-acceptDone           
-	s.workers.Wait()       
+	close(stopped)
+	err := listener.Close()
+	<-acceptDone
+	s.workers.Wait()
 
 	if errors.Is(err, net.ErrClosed) {
 		return nil
 	}
 	return err
 }
-
 
 // TODO 4: Study this starter request handler, then complete and test the protocol
 // contract. Add tests for malformed JSON, oversized input, remote errors, panics,
