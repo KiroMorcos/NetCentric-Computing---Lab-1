@@ -57,21 +57,88 @@ func NewServer(receiver any) (*Server, error) {
 // and launch the accept loop without blocking the caller.
 // Start begins accepting remote calls at address. Use port 0 to request an available port.
 func (s *Server) Start(address string) error {
-	return errors.New("TODO: implement Server.Start")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.listener != nil {
+		return errors.New("server already started")
+	}
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		return err
+	}
+	s.listener = listener
+	s.stopped = make(chan struct{})
+	s.acceptDone = make(chan struct{})
+
+	go s.acceptLoop(listener, s.stopped, s.acceptDone)
+	return nil
+}
+
+// acceptLoop accepts connections until the listener is closed.
+func (s *Server) acceptLoop(listener net.Listener, stopped, done chan struct{}) {
+	defer close(done)
+	for {
+		connection, err := listener.Accept()
+		if err != nil {
+			select {
+			case <-stopped:
+				return
+			default:
+			}
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
+			time.Sleep(10 * time.Millisecond) 
+			continue
+		}
+		s.workers.Add(1)
+		go func() {
+			defer s.workers.Done()
+			s.handle(connection)
+		}()
+	}
 }
 
 // TODO 2: Return the listener address safely while allowing port 0 discovery.
 // Address returns the address assigned to the running server.
 func (s *Server) Address() string {
-	return ""
-}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
+	if s.listener == nil {
+		return ""
+	}
+	return s.listener.Addr().String()
+}
 // TODO 3: Close the listener, signal the accept loop, wait for its workers,
 // and leave the server in a state where Start can be called again.
 // Stop stops accepting new connections and waits for active handlers to finish.
 func (s *Server) Stop() error {
-	return errors.New("TODO: implement Server.Stop")
+	s.mu.Lock()
+	listener := s.listener
+	stopped := s.stopped
+	acceptDone := s.acceptDone
+	if listener == nil {
+		s.mu.Unlock()
+		return nil
+	}
+	s.listener = nil
+	s.stopped = nil
+	s.acceptDone = nil
+	s.mu.Unlock()
+
+	close(stopped)         
+	err := listener.Close() 
+	<-acceptDone           
+	s.workers.Wait()       
+
+	if errors.Is(err, net.ErrClosed) {
+		return nil
+	}
+	return err
 }
+
 
 // TODO 4: Study this starter request handler, then complete and test the protocol
 // contract. Add tests for malformed JSON, oversized input, remote errors, panics,
