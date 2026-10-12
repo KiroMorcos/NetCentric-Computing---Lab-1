@@ -293,5 +293,60 @@ func NewClient(address string) (*Client, error) {
 // response, return remote errors, and decode the response into out.
 // Call invokes method and decodes its result into out. Pass nil for no result.
 func (c *Client) Call(method string, out any, args ...any) error {
-	return errors.New("TODO: implement Client.Call")
+	if method == "" {
+		return errors.New("method cannot be empty")
+	}
+
+	timeout := c.Timeout
+	if timeout <= 0 {
+		timeout = defaultCallTimeout
+	}
+
+	encodedArgs := make([]json.RawMessage, len(args))
+	for index, arg := range args {
+		data, err := json.Marshal(arg)
+		if err != nil {
+			return fmt.Errorf("encode argument %d: %v", index, err)
+		}
+		encodedArgs[index] = data
+	}
+
+	connection, err := net.DialTimeout("tcp", c.Address, timeout)
+	if err != nil {
+		return fmt.Errorf("connect to %s: %v", c.Address, err)
+	}
+	defer connection.Close()
+
+	if err := connection.SetDeadline(time.Now().Add(timeout)); err != nil {
+		return fmt.Errorf("set deadline: %v", err)
+	}
+
+	req := request{Method: method, Args: encodedArgs}
+	if err := json.NewEncoder(connection).Encode(req); err != nil {
+		return fmt.Errorf("send request: %v", err)
+	}
+
+	var res response
+	if err := json.NewDecoder(bufio.NewReader(connection)).Decode(&res); err != nil {
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			return fmt.Errorf("call %q timed out after %v", method, timeout)
+		}
+		return fmt.Errorf("decode response: %v", err)
+	}
+
+	if !res.OK {
+		if res.Error == "" {
+			return errors.New("remote call failed")
+		}
+		return errors.New(res.Error)
+	}
+
+	if out == nil {
+		return nil
+	}
+	if err := json.Unmarshal(res.Value, out); err != nil {
+		return fmt.Errorf("decode result: %v", err)
+	}
+	return nil
 }
