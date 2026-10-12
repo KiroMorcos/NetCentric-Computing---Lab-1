@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"sync"
 	"time"
+	"unicode"
 )
 
 const (
@@ -82,40 +83,68 @@ func (s *Server) Stop() error {
 func (s *Server) handle(connection net.Conn) {
 	defer connection.Close()
 	encoder := json.NewEncoder(connection)
+	reply := func(res response) {
+		_ = connection.SetWriteDeadline(time.Now().Add(defaultCallTimeout))
+		_ = encoder.Encode(res)
+	}
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			_ = encoder.Encode(response{Error: fmt.Sprintf("remote method panicked: %v", recovered)})
+			reply(response{Error: fmt.Sprintf("remote method panicked: %v", recovered)})
 		}
 	}()
 
+	_ = connection.SetReadDeadline(time.Now().Add(defaultCallTimeout))
 	decoder := json.NewDecoder(bufio.NewReader(io.LimitReader(connection, maxRequestBytes+1)))
 	var req request
 	if err := decoder.Decode(&req); err != nil {
-		_ = encoder.Encode(response{Error: fmt.Sprintf("invalid request: %v", err)})
+		reply(response{Error: fmt.Sprintf("invalid request: %v", err)})
 		return
 	}
+	_ = connection.SetReadDeadline(time.Time{})
+
 	if err := validateRequest(req); err != nil {
-		_ = encoder.Encode(response{Error: err.Error()})
+		reply(response{Error: err.Error()})
 		return
 	}
 	result, err := s.invoke(req)
 	if err != nil {
-		_ = encoder.Encode(response{Error: err.Error()})
+		reply(response{Error: err.Error()})
 		return
 	}
 	payload, err := json.Marshal(result)
 	if err != nil {
-		_ = encoder.Encode(response{Error: fmt.Sprintf("encode result: %v", err)})
+		reply(response{Error: fmt.Sprintf("encode result: %v", err)})
 		return
 	}
-	_ = encoder.Encode(response{OK: true, Value: payload})
+	reply(response{OK: true, Value: payload})
 }
 
 // TODO 5: Reject empty or unsafe method names, too many arguments, arguments
 // larger than maxArgumentBytes, and requests larger than maxRequestBytes.
 // validateRequest rejects malformed or abusive requests before reflection runs.
 func validateRequest(req request) error {
-	return errors.New("TODO: implement validateRequest")
+	if req.Method == "" {
+		return errors.New("method cannot be empty")
+	}
+	for _, r := range req.Method {
+		if unicode.IsSpace(r) || unicode.IsControl(r) {
+			return errors.New("method name contains whitespace or control characters")
+		}
+	}
+	if len(req.Args) > maxArguments {
+		return fmt.Errorf("too many arguments: got %d, max %d", len(req.Args), maxArguments)
+	}
+	total := 0
+	for index, arg := range req.Args {
+		if len(arg) > maxArgumentBytes {
+			return fmt.Errorf("argument %d is larger than %d bytes", index, maxArgumentBytes)
+		}
+		total += len(arg)
+		if total > maxRequestBytes {
+			return fmt.Errorf("request arguments are larger than %d bytes", maxRequestBytes)
+		}
+	}
+	return nil
 }
 
 // TODO 6: Study and test this starter reflection bridge. Your required work is to
