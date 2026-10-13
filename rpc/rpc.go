@@ -167,7 +167,6 @@ func (s *Server) handle(connection net.Conn) {
 		reply(response{Error: fmt.Sprintf("invalid request: %v", err)})
 		return
 	}
-	_ = connection.SetReadDeadline(time.Time{})
 
 	if err := validateRequest(req); err != nil {
 		reply(response{Error: err.Error()})
